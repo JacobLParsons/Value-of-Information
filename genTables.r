@@ -1,5 +1,5 @@
 # Generate Data for Each List
-for(list in 1:7)
+for(site in 1:27)
 {
     # Set Working Directory
     setwd("/storage/work/jlp592/RevisedUkraine")
@@ -15,86 +15,101 @@ for(list in 1:7)
     
     missingNSU = is.na(data$NSU)
     missingY = is.na(data$Y)
-    missingLogit = is.na(data$logit)
+    missingLogit = is.na(data$logits)
 
     data$Y[missingLogit] = NA
     data$logit[missingY] = NA
 
-    sampleSize = data$n[,list,]
+    numNSU = sum(!is.na(data$NSU[site,] ))
+    numPhat = sum(!is.na(data$logit[site,,])) 
+    numPresent = numPhat  + numNSU
 
-    numPresent = sum(!is.na(data$logit[,list,]))
+    NSUpresent = !is.na(data$NSU)
+    phatpresent = !is.na(data$logit[site,,]) 
     
-    setwd(paste("/storage/home/jlp592/work/RevisedUkraine/CrossValidation2/", list, "/", sep = ""))
+    setwd(paste("/storage/home/jlp592/work/RevisedUkraine/CrossValidation/", site, "/", sep = ""))
 
+    #load("./1.RData")
     load("./all.RData")
     
     length = length(chain$mu)
 
-    table1 = matrix(NA, nrow = length, ncol = 2*numPresent)
+    table1 = matrix(NA, nrow = length, ncol = numNSU + 2*numPhat)
     table2 = matrix(NA, nrow = length, ncol = 11)
-
-    present = !is.na(data$logit[,list,])
 
     # Generate the tables
 
     data.full = data
 
-    print(dim(table1))
     
     for(n in 1:length)
     {
-        #Simulate Data
-        N = chain$N[n,,]
-        p = matrix(NA, nrow = 27, ncol = 9)
-        phat = matrix(NA, nrow = 27, ncol = 9)
-        Y = matrix(NA, nrow = 27, ncol = 9)
-
-        a = runif(1)
-        b = rgamma(1, 1, .01)
-
-        alpha = a*b
-        beta = b - alpha
-
-        p[,1] = logit(rbeta(27, alpha, beta))
-
-        p[which(p[,1] == Inf),1] = 10
-        p[which(p[,1] == -Inf),1] = -10
+        NSUpresent = !is.na(data.full$NSU)
         
-        Y[,1] = rbinom(27, N[,1], invlogit(p[,1]))
+        ##Simulate Data
+        pi = rep(NA, 9)
+        pi[1] = rbeta(1, chain$alpha0[n], chain$beta0[n])
         
+        N = rep(NA, 9)
+        N[1] = rbinom(1, size = data.full$R[site,1], prob = pi[1])
+        
+        p = matrix(NA, nrow = 7, ncol = 9)
+        p[,1] = rbeta(7, chain$alpha[n,],chain$beta[n,])
+
+        delta = rnorm(1, mean = 0, sd = sqrt(chain$sigmaDeltaSq[n]))
         theta = chain$theta[n]
-        gamma = rnorm(n = 1, mean=0, sd = sqrt(chain$sigmaGammaSq[n]) )
-        delta = chain$delta[n,]
+        gamma = chain$gamma[n,]
+        
+        phat = matrix(NA, nrow = 7, ncol = 9)
+        phat[,1] = logit(p[,1]) + theta + delta + gamma + rnorm(7, mean = 0,  sd = sqrt(chain$sigmaESq[n]/data.full$n[site, ,1]) )
 
-        phat[,1] = rnorm(n = 27, mean = p[,1] + theta + gamma + delta, sd = sqrt(chain$sigmaESq[n]/sampleSize[,1]) )
+        Y = matrix(NA, nrow = 7, ncol = 9)
+        Y[,1] = rbinom(n = 7, size = N[1], prob = p[,1])
+        
+        mu = chain$mu[n]
+        sigmaNSq = (chain$sigmaNSq[n,1,] / data$NSU.se[1,]^2)*data.full$NSU.se[site,]^2
 
+        NSU = rep(NA, 9)
+        NSU[1] = log(N[1]) + mu + rnorm(1, 0, sd = sqrt(sigmaNSq[1]/N[1]^2) )
+
+        
         for(year in 2:9)
         {
-            p[,year] = p[,year - 1] + rnorm(27, mean = 0, sd = sqrt(chain$sigmaPSq) )
+            ##Simulate Data
+            yearTrend = chain$yearTrend[n,year]
+            pi[year] = invlogit( logit(pi[year - 1]) + yearTrend + rnorm(n=1, mean = 0, sd = sqrt(chain$sigmaPiSq[n]) ) )
+                      
+            N[year] = rbinom(1, size = data.full$R[site,year], prob = pi[year])
+                        
+            p[,year] = invlogit( logit(p[,year - 1]) + rnorm(n=7, mean = 0, sd = sqrt(chain$sigmaPSq[n]) ) )
+                        
+            phat[,year] = logit(p[,year]) + theta + delta + gamma + rnorm(7, mean = 0,  sd = sqrt(chain$sigmaESq[n]/data.full$n[site, ,year]) )
             
-            p[which(p[,year] == Inf),year] = 10
-            p[which(p[,year] == -Inf),year] = -10
+            Y[,year] = rbinom(n = 7, size = N[year], prob = p[,year])
             
-            Y[,year] = rbinom(27, N[,year], invlogit(p[,year]))
-            
-            phat[,year] = rnorm(n = 27, mean = p[,year] + theta + gamma + delta, sd = sqrt(chain$sigmaESq[n]/sampleSize[,year]))
+            NSU[year] = log(N[year]) + mu + rnorm(1, 0, sd = sqrt(sigmaNSq[year]/N[year]^2) )
             
         }
 
-        table1[n,1:numPresent] = phat[present]
-        table1[n,(1+numPresent):(2*numPresent)] = Y[present]
+        if(sum(NSUpresent[site,]) > 0)
+        {
+            table1[n,1] = NSU[NSUpresent[site,]]
+        }
+
+        table1[n,(sum(NSUpresent[site,]) + 1):(sum(NSUpresent[site,]) + numPhat)] = phat[phatpresent]
+        table1[n,(sum(NSUpresent[site,]) + numPhat + 1):(sum(NSUpresent[site,]) + 2*numPhat)] = Y[phatpresent]
 
         ## Target Theta
 
         current = list()
-        current$p = abind(chain$p[n,,,], invlogit(p), along = 2)
-        current$delta = delta
-        current$gamma = c(chain$gamma[n,], gamma)
+        current$p = abind(chain$p[n,,,], invlogit(p), along = 1)
+        current$delta = c(chain$delta[n,], delta)
+        current$gamma = gamma
         current$sigmaESq = chain$sigmaESq[n]
         numYears = 9
 
-        data$logit = abind(data.full$logit[,-list,], phat, along = 2 )
-        data$n = abind(data.full$n[,-list,], data.full$n[,list,], along = 2 )
+        data$logit = abind(data.full$logit[-site,,], phat, along = 1 )
+        data$n = abind(data.full$n[-site,,], data.full$n[site,,], along = 1)
         
 
         mean = logit(current$p) + replicate(numYears,outer(current$delta, current$gamma, FUN=function(x,y) (x+y)))
@@ -108,13 +123,14 @@ for(list in 1:7)
         table2[n,1] = var*coef
 
         ## Target Mu
-        current$N = chain$N[n,,]
-        current$sigmaNSq = chain$sigmaNSq[n,,]
+        current$N = rbind(chain$N[n,,], N)
+        current$sigmaNSq = rbind(chain$sigmaNSq[n,,], sigmaNSq)
 
+        data$NSU = rbind(data.full$NSU[-site,], exp(NSU) )
         
         NSUpresent = !is.na(data$NSU)
-        var = 1 / ( 1 + sum((current$N[NSUpresent])^2/(current$sigmaNSq[NSUpresent]) ) )
-        coef = sum(current$N[NSUpresent]^2*(log(data$NSU[NSUpresent]) - log(current$N[NSUpresent]) )/(current$sigmaNSq[NSUpresent] ) )
+        var = 1 / ( 1 + sum((current$N[NSUpresent])^2/(current$sigmaNSq[NSUpresent]) , na.rm = TRUE) )
+        coef = sum(current$N[NSUpresent]^2*(log(data$NSU[NSUpresent ]) - log(current$N[NSUpresent ]) )/(current$sigmaNSq[NSUpresent] ) , na.rm = TRUE)
 
         table2[n,2] = var*coef
 
@@ -129,108 +145,6 @@ for(list in 1:7)
     }
     
     save(list = c("table1", "table2"), file = "./tables.RData")
-
+    print(dim(table1))
     
 }
-
-setwd("/storage/work/jlp592/RevisedUkraine")
-
-source("./LoadData.r") 
-source("./MCMC.r")
-
-
-list = "NSU"
-data = LoadData()
-
-data$logit = logit(data$phat)
-data$logit[is.infinite(data$logit)] = NA
-
-missingNSU = is.na(data$NSU)
-missingY = is.na(data$Y)
-missingLogit = is.na(data$logit)
-
-data$Y[missingLogit] = NA
-data$logit[missingY] = NA
-
-data$NSU[5,2] = NA
-data$NSU[9,2] = NA
-
-numNSU = sum(!is.na(data$NSU) )
-numPresent = numNSU
-
-length = length(chain$mu)
-
-NSUpresent = !is.na(data$NSU)
-
-setwd(paste("/storage/home/jlp592/work/RevisedUkraine/CrossValidation2/NSU/", sep = ""))
-
-length = length(chain$mu)
-
-table1 = matrix(NA, nrow = length, ncol = numNSU)
-table2 = matrix(NA, nrow = length, ncol = 11)
-
-data.full = data
-
-load("./all.RData")
-
- 
-for(n in 1:length)
-{
-    NSU = rep(NA, numNSU)
-
-    mu = rnorm(1, 0, 1)
-    tauSq = 1/rgamma(1, shape = 5, rate = 5)
-    sigmaNSq = tauSq * data$NSU.se[NSUpresent]
-
-    NSU = log(chain$N[n,,][NSUpresent]) + mu + rnorm(numNSU, 0, sd = sqrt(sigmaNSq[1]/chain$N[NSUpresent]^2) )
-
-    table1[n,] = NSU
-
-    ## Target Theta
-
-    current = list()
-    current$p = chain$p[n,,,]
-    current$delta = chain$delta[n,]
-    current$gamma = chain$gamma[n,]
-    current$sigmaESq = chain$sigmaESq[n]
-    numYears = 9
-
-    data$logit = data.full$logit
-    data$n = data.full$n
-
-    mean = logit(current$p) + replicate(numYears,outer(current$delta, current$gamma, FUN=function(x,y) (x+y)))
-    logitpresent = !is.na(data$logit)
-    remove = is.infinite(data$logit - mean)
-    logitpresent = !is.na(data$logit) & !remove
-    var = 1/(1 + sum(data$n[logitpresent])/current$sigmaESq )
-    
-    coef = sum(data$n[logitpresent]*(data$logit[logitpresent] - mean[logitpresent]) )/current$sigmaESq
-
-    table2[n,1] = var*coef
-
-    ## Target Mu
-    current$N = chain$N[n,,]
-    current$sigmaNSq =  sigmaNSq
-
-    data$NSU[NSUpresent] = exp(NSU)
-    
-    NSUpresent = !is.na(data$NSU)
-    var = 1 / ( 1 + sum((current$N[NSUpresent])^2/(current$sigmaNSq) , na.rm = TRUE) )
-    coef = sum(current$N[NSUpresent]^2*(log(data$NSU[NSUpresent]) - log(current$N[NSUpresent ]) )/(current$sigmaNSq ) , na.rm = TRUE)
-
-    table2[n,2] = var*coef
-
-    ## Target Means
-
-    table2[n,3] = digamma(chain$alpha0[n]) - digamma(chain$beta0[n])
-
-    for(year in 2:9)
-    {
-        table2[n, 2+year] = table2[n, 1+year] + chain$yearTrend[n, year]
-    }
-
-    
-}
-
-
-save(list = c("table1", "table2"), file = "./tables.RData")
